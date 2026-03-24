@@ -53,7 +53,7 @@ func (c *Client) CreateContent(content *Content) (*Content, error) {
 
 func (c *Client) GetContent(id string) (*Content, error) {
 	var response Content
-	path := fmt.Sprintf("/rest/api/content/%s?expand=space,body.storage,version,ancestors", id)
+	path := fmt.Sprintf("/rest/api/content/%s?expand=space,body.storage,version,ancestors,container", id)
 	if err := c.Get(path, &response); err != nil {
 		return nil, err
 	}
@@ -62,7 +62,11 @@ func (c *Client) GetContent(id string) (*Content, error) {
 
 func (c *Client) UpdateContent(content *Content) (*Content, error) {
 	var response Content
-	content.Version.Number++
+	if content.Version != nil {
+		content.Version.Number++
+	} else {
+		content.Version = &Version{Number: 1}
+	}
 	path := fmt.Sprintf("/rest/api/content/%s", content.Id)
 	if err := c.Put(path, content, &response); err != nil {
 		return nil, err

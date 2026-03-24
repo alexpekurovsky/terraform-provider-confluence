@@ -134,16 +134,30 @@ func contentFromResourceData(d *schema.ResourceData) *Content {
 func updateResourceDataFromContent(d *schema.ResourceData, content *Content, client *Client) error {
 	d.SetId(content.Id)
 	m := map[string]interface{}{
-		"type":    content.Type,
-		"space":   content.Space.Key,
-		"body":    content.Body.Storage.Value,
-		"title":   content.Title,
-		"version": content.Version.Number,
-		"url":     client.URL(content.Links.Context + content.Links.WebUI),
+		"type":  content.Type,
+		"title": content.Title,
 	}
-	if len(content.Ancestors) > 1 {
+
+	if content.Space != nil {
+		m["space"] = content.Space.Key
+	}
+
+	if content.Body != nil && content.Body.Storage != nil {
+		m["body"] = content.Body.Storage.Value
+	}
+
+	if content.Version != nil {
+		m["version"] = content.Version.Number
+	}
+
+	if content.Links != nil {
+		m["url"] = client.URL(content.Links.Context + content.Links.WebUI)
+	}
+
+	if len(content.Ancestors) > 0 {
 		m["parent"] = content.Ancestors[len(content.Ancestors)-1].Id
 	}
+
 	for k, v := range m {
 		err := d.Set(k, v)
 		if err != nil {
