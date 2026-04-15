@@ -187,59 +187,83 @@ func (c *Client) do(method, path, contentType string, body *bytes.Buffer, result
 
 // do uses the client to send a specified request
 func (c *Client) doRaw(method, path, contentType string, body *bytes.Buffer) (*bytes.Buffer, error) {
-	fullPath := c.basePath + path
-	u, err := c.baseURL.Parse(fullPath)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest(method, u.String(), body)
-	if err != nil {
-		return nil, err
-	}
+	maxRetries := 5
+	baseDelay := 1 * time.Second
 
-	for header, values := range c.headers {
-		for _, value := range values {
-			req.Header.Add(header, value)
-		}
-	}
+	// Save original body for retries since http.Request consumes it
+	originalBody := body.Bytes()
 
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	req.Header.Add("X-Atlassian-Token", "nocheck")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	defer resp.Body.Close()
-	expectedStatusCode := map[string]int{
-		"POST":   200,
-		"PUT":    200,
-		"GET":    200,
-		"DELETE": 204,
-	}
-	if resp.StatusCode != expectedStatusCode[method] {
-		var responseBody string
-		var errResponse ErrorResponse
-		err = json.NewDecoder(resp.Body).Decode(&errResponse)
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		fullPath := c.basePath + path
+		u, err := c.baseURL.Parse(fullPath)
 		if err != nil {
-			responseBody = "Could not decode error"
-		} else {
-			responseBody = errResponse.String()
+			return nil, err
 		}
-		s := body.String()
-		return nil, fmt.Errorf("%s\n\n%s %s\n%s\n\n%s",
-			resp.Status, method, fullPath, s, responseBody)
-	}
-	result := new(bytes.Buffer)
-	_, err = result.ReadFrom(resp.Body)
-	if err != nil {
-		return nil, err
+
+		// Use fresh body for each attempt
+		requestBody := bytes.NewBuffer(originalBody)
+		req, err := http.NewRequest(method, u.String(), requestBody)
+		if err != nil {
+			return nil, err
+		}
+
+		for header, values := range c.headers {
+			for _, value := range values {
+				req.Header.Add(header, value)
+			}
+		}
+
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		req.Header.Add("X-Atlassian-Token", "nocheck")
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		expectedStatusCode := map[string]int{
+			"POST":   200,
+			"PUT":    200,
+			"GET":    200,
+			"DELETE": 204,
+		}
+
+		// Check if we got a 429 (rate limit) error and should retry
+		if resp.StatusCode == 429 && attempt < maxRetries {
+			resp.Body.Close()
+
+			// Calculate wait time with exponential backoff: 1s, 2s, 4s, 8s, 16s
+			waitTime := baseDelay * time.Duration(1<<uint(attempt))
+			time.Sleep(waitTime)
+			continue
+		}
+
+		defer resp.Body.Close()
+		if resp.StatusCode != expectedStatusCode[method] {
+			var responseBody string
+			var errResponse ErrorResponse
+			err = json.NewDecoder(resp.Body).Decode(&errResponse)
+			if err != nil {
+				responseBody = "Could not decode error"
+			} else {
+				responseBody = errResponse.String()
+			}
+			s := string(originalBody)
+			return nil, fmt.Errorf("%s\n\n%s %s\n%s\n\n%s",
+				resp.Status, method, fullPath, s, responseBody)
+		}
+		result := new(bytes.Buffer)
+		_, err = result.ReadFrom(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		return result, nil
 	}
 
-	return result, nil
+	return nil, fmt.Errorf("429 Too Many Requests: max retries (%d) exceeded", maxRetries)
 }
 
 func (e *ErrorResponse) String() string {
